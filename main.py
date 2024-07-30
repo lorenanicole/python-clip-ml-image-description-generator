@@ -4,8 +4,12 @@ from fastapi import File, FastAPI, UploadFile
 import torch
 from torchvision import transforms as T
 import clip
+import hashlib
+
+from cache import Cache, my_lru_cache
 
 app = FastAPI()
+cache = Cache(max_size=128)
 
 # Indicates if using Nvidia graphics card or not - cuda = yes otherwise cpu
 device = "cpu" # "cuda" if torch.cuda.is_available() else "cpu"
@@ -21,9 +25,16 @@ async def root(name: str):
 @app.post("/description")
 async def generate_description(image: UploadFile = File(...)):
     image = await image.read()
-    image_obj = Image.open(BytesIO(image))
+    bytes_img = BytesIO(image)
+    image_obj = Image.open(bytes_img)
+
+    readable_hash = hashlib.sha256(image).hexdigest()
+    text_labels_in_cache = cache.get(readable_hash)
+    if text_labels_in_cache and text_labels_in_cache != -1:
+        return text_labels_in_cache
 
     image_input = preprocess(image_obj).unsqueeze(0).to(device)
+    # Can replace with https://pytorch.org/vision/main/generated/torchvision.datasets.CIFAR100.html
     text_snippets = ["dog", "cat", "tiger", "man", "woman", "child", "grandma"] 
     text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in text_snippets])
 
@@ -48,4 +59,9 @@ async def generate_description(image: UploadFile = File(...)):
     for indx, val in enumerate(indices):
         text_labels[text_snippets[val]] = values[indx].item()
     
+    cache.put(readable_hash, text_labels)
     return text_labels
+
+@app.get('/cache-stats')
+def get_cache_stats():
+    return cache
