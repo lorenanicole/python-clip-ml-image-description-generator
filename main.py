@@ -19,26 +19,33 @@ async def root(name: str):
     return {"message": f"Hello World"}
 
 @app.post("/description")
-async def generate_descipription(image: UploadFile = File(...)):
+async def generate_description(image: UploadFile = File(...)):
     image = await image.read()
     image_obj = Image.open(BytesIO(image))
 
     image_input = preprocess(image_obj).unsqueeze(0).to(device)
     text_snippets = ["dog", "cat", "tiger", "man", "woman", "child", "grandma"] 
-    import pdb; pdb.set_trace()
-    text_inputs = T.cat([clip.tokenize(f"a photo of a {c}") for c in text_snippets])
+    text_inputs = torch.cat([clip.tokenize(f"a photo of a {c}") for c in text_snippets])
 
     # Calculate features for our "zero-shot learning." CLIP is a model not trained
     # on specific tasks but is when a model attempts to predict a class it saw 
     # zero times in the training data.
-    with T.nograd():
+    # 
+    # We explictly tell torch no to keep track of the gradients when updating weights
+    # as this will impact back propagation and then we calcualte similarity scorings.
+    with torch.no_grad():
         image_features = model.encode_image(image_input) 
         text_features = model.encode_text(text_inputs)  
     
-    # Calcualate similarity scorings
+    # Get the top 5 most similary labels!
     image_features /= image_features.norm(dim=-1, keepdim=True)
     text_features /= text_features.norm(dim=-1, keepdim=True)
-    similarity = (100.0 * image_features @ text_features.T).softmax # .(dim=-1).cpu().numpy() 
-    values, indices = similarity[0].took(5)
+    similarity = (100.0 * image_features @ text_features.T).softmax(dim=-1)# .cpu().numpy() 
+    values, indices = similarity[0].topk(5)
 
-    print(value, indices)
+    # Marry the value and indices back to the text label
+    text_labels = {}
+    for indx, val in enumerate(indices):
+        text_labels[text_snippets[val]] = values[indx].item()
+    
+    return text_labels
